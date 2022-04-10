@@ -1,0 +1,488 @@
+---
+title: "HW 01 - Statistical Learning"
+author: "G21: Davide Mascolo - Antonella Cruoglio - Giuliana Iovino - Mario Napoli"
+date: "29 marzo 2022"
+output: html_document
+geometry: margin = 1cm
+---
+
+```{r, include = F}
+library(kableExtra)
+```
+
+```{r, setup, include = F}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
+options(scipen = 999)
+```
+
+## Part 1
+### 1.
+Unlike the orthogonal series expansion that model the global behavior of data, with the powered truncated functions we can model the local structures of data. More over truncated basis functions are neither normal neither orthogonal.
+
+### 2.
+We plot a few elements of $G_{d,q}$ with $d \in (1, 10)$ and $q \in (3, 10)$.
+```{r}
+## Truncated Power Functions
+g_blue <- function(x, d) x^(d)
+g_red  <- function(x,eps,d) pmax(0, (x-eps))^d
+```
+
+```{r}
+## Plot
+Gdq <- function(d,q){
+  x <- seq(0,1,0.01)
+  knots <- quantile(x, probs = seq(0.1, 0.9,
+                                   length.out = q))
+  
+  plot.new()
+  plot.window(xlim=c(0,1), ylim=c(0,1))
+  axis(1)
+  axis(2)
+  title(paste('Truncated Power Function for d =', d,
+              'and q =', q))
+  title(xlab = 'x')
+  title(ylab = parse(text = paste0('G[dp]')))
+  box()
+  
+  for(d in 1:d) {
+    g1 <- g_blue(x, d)
+    curve(g_blue(x, d),
+          add = TRUE, col = 'blue', lwd = 2)
+  }
+  
+  knots <- quantile(x, probs = seq(0.1, 0.9,
+                                   length.out = q))
+  
+  for(q in 1:q){
+    
+    g2 <- g_red(x,knots[q],d)
+    curve(g_red(x,knots[q],d),
+          add = TRUE, col = 'red', lwd = 2)
+  }
+}
+```
+
+```{r, fig.width = 9, fig.height = 9, echo=FALSE}
+## Plot
+par(mfrow = c(2,2))
+Gdq(1,3)
+Gdq(1,10)
+Gdq(3,3)
+Gdq(3,10)
+```
+
+### 3. Spline Regression
+We implement regression splines from scratch by considering:
+
+- $d \in (1, 3)$
+- knots on q-equispaced locations within the x-range
+```{r, echo = F}
+## Import Data
+data <- read.csv('wmap.csv')
+```
+
+```{r}
+## Design Matrix
+design.mat <- function(data, d, q){
+  n <- nrow(data)
+  j <- (d+1)+q
+  X <- matrix(nrow = n, ncol= j)
+  X <- data.frame(X)
+  
+  for (i in 0:d) {
+    X[,i+1] <- g_blue(data$x, i)
+  }
+  
+  knots <- quantile(data$x, probs = seq(0.1, 0.9,
+                                        length.out = q),
+                    names = FALSE)
+  
+  
+  for (k in 1:q) {
+    X[,(d+1+k)] <- g_red(data$x, knots[k], d)
+  }
+  X$y <- data$y
+  
+  ## Esclude the intercept
+  return(X[,-1])
+}
+```
+
+#### 3.1 Parameter tuning with K-Fold Cross Validation
+We choose the best combination of $d$ and $q$.
+```{r}
+KFCV <- function(data, d, q, K){
+  n <- nrow(data)
+  
+  folds <- sample(rep(1:K, length = n))
+  KCV <- vector() ## Init the CV-score vector
+  
+  mseq <- rep(0, q)
+  
+  for (idx in 1:q) {
+    train <- design.mat(data, d, idx)
+    ## Loop
+    for (k in 1:K){
+      ## Fit using obs *not* in the active fold V_k
+      fit    <- lm(y ~ ., data = train[folds != k,]) 
+      ## Get the X's for obs in the active fold V_k
+      x.out  <- train[folds == k, ]
+      ## Predict on the obs in the active fold V_k
+      yhat   <- suppressWarnings(predict(fit,
+                                         newdata = x.out))
+      ## Compare with the responses in the active fold V_k
+      y.out  <- train$y[which(folds == k)]
+      KCV[k] <- mean((y.out - yhat)^2)
+    }
+    mseq[idx] <- mean(KCV)    ## K-CV estimate
+    
+  }
+  return(mseq)
+}
+```
+
+```{r}
+## Optimal choice
+optim <- function(d, K, mseq) data.frame(K = K, d = d,
+                                    q = which.min(mseq),
+                                    MSE = min(mseq))
+```
+
+```{r, echo = F}
+## Results
+K5_D1  <- KFCV(data, 1, 15, 5)
+K5_D3  <- KFCV(data, 3, 15, 5)
+K10_D1 <- KFCV(data, 1, 15, 10)
+K10_D3 <- KFCV(data, 3, 15, 10)
+
+kable(rbind(optim(d = 1, K = 5, K5_D1),
+            optim(d = 3, K = 5, K5_D3), 
+            optim(d = 1, K = 10, K10_D1),
+            optim(d = 3, K = 10,
+                  K10_D3))) %>%
+  kable_styling()
+```
+
+The best combination of parameters is with $d = 3$ and $q = 6$. These two values minimize the MSE and are obtained through 5Fold CV.
+We note that the value of MSE is relatively big, but this can  depends by the range of the target variable. In this case we have a lot of variability in the data and we will see it later.
+
+```{r, include = F, echo = F}
+## Plot
+plot(1:15, K10_D1, type = 'o', xlab = 'q',
+     ylab = 'MSE', lwd = 3, 
+     ylim = c(min(K10_D1), max(K5_D1)))
+lines(1:15, K5_D1, type = 'o', col = 2, lwd = 3)
+legend('bottomleft', c('K = 5', 'K = 10'),
+       col = c(2,1), pch = 19)
+```
+
+```{r, include = F, echo = F}
+## Plot
+plot(1:15, K10_D3, type = 'o', xlab = "q",
+     ylab = 'MSE', lwd = 3, 
+     ylim = c(min(K5_D3), max(K5_D3)))
+lines(1:15, K5_D3, type = 'o', col = 2, lwd = 3)
+legend('bottomleft', c('K = 5', 'K = 10'),
+       col = c(2,1), pch = 19)
+```
+
+#### 3.2 Parameter tuning with Generalized Cross Validation
+```{r}
+## Implementation of GCV
+Generalized_CV <- function(data, d, q){
+  n <- nrow(data)
+  p <- (d+1)+q
+  
+  GCVq <- rep(0, q)
+  for (idx in 1:q) {
+    train <- design.mat(data, d, idx)
+    fit <- lm(y ~ ., data = train)
+    MSE.tr <-deviance(fit)/n
+    GCV <- MSE.tr/(1-(p/n))^2
+    GCVq[idx] <- GCV
+  }
+  return(GCVq)
+}
+```
+
+```{r}
+## Generalized Cross Validation
+GCV_D1 <- Generalized_CV(data, 1, 15)
+GCV_D3 <- Generalized_CV(data, 3, 15)
+```
+
+```{r, echo=FALSE, fig.width = 13}
+par(mfrow = c(1,2))
+## Plot
+plot(1:15, K10_D1, type = 'o', xlab = 'q',
+     ylab = 'MSE', lwd = 2, 
+     ylim = c(min(GCV_D1), max(GCV_D1)),
+     main = 'CV types for d = 1')
+lines(1:15, K5_D1, type = 'o', col = 2, lwd = 2)
+lines(1:15, GCV_D1, type = 'o', col = 4, lwd = 2)
+legend('bottomleft', c('K = 5', 'K = 10', 'GCV'),
+       col = c(2,1,4), pch = 19, cex = 0.8, bty = 'n')
+
+## Plot
+plot(1:15, K10_D3, type = 'o', xlab = 'q',
+     ylab = 'MSE', lwd = 2, 
+     ylim = c(min(GCV_D3), max(GCV_D3)),
+     main = 'CV types for d = 3')
+lines(1:15, K5_D3, type = 'o', col = 2, lwd = 2)
+lines(1:15, GCV_D3, type = 'o', col = 4, lwd = 2)
+legend('bottomleft', c('K = 5', 'K = 10', 'GCV'),
+       col = c(2,1,4), pch = 19, cex = 0.8, bty = 'n')
+```
+
+Looking at these plots we can compare the estimation error returned by the KFCV with the estimation error returned by the Generalized Cross Validation.
+In particular, we note how the error estimate using GCV tends to decrease as the number of nodes q increases. Evaluating this error would lead to the choice of a too high number of nodes and a model that would probably be overfitted. This is justified by the fact that the validation of the model using this technique takes place with a closed formula and therefore heavily underestimating the generalization error. For these reasons the optimal combination is the one obtained through 5Fold CV.
+
+Now, we can use least squares to determine the optimal coefficients $\hat\beta$.
+```{r, comment = NA}
+## Best combination: d = 3, q = 6
+X    <- design.mat(data, d = 3, q = 6)
+fit  <- lm(y ~ ., data = X)
+(cf  <- fit$coefficients)
+```
+
+#### GCV-tuned polynomial regression
+```{r}
+## Implementation of polynomial regression
+Poly_GCV <- function(data, d, q){
+    n <- nrow(data)
+    p <- (d+1)+q
+    
+    GCVq <- rep(0, q)
+    for (idx in 1:q) {
+      fit    <- lm(y ~ poly(x, degree = d), data = train)
+      MSE.tr <-deviance(fit)/n
+      GCV    <- MSE.tr/(1-(p/n))^2
+      GCVq[idx] <- GCV
+    }
+    return(GCVq)
+  }
+```
+
+```{r, echo = FALSE, fig.align = 'center'}
+## Polynomial regression with GCV
+n       <- nrow(data)
+ds      <- 1:10
+ps      <- ds + 1
+fun     <- function(d) if (d == 0) lm(y ~ 1, data) else
+           lm(y ~ poly(x, degree = d), data)
+fits    <- lapply(ds, fun)
+MSEs.tr <- unlist( lapply(fits, deviance) )/n
+GCV     <- MSEs.tr / (1 - (ps)/n )^2
+
+plot(ds, GCV, type = 'b', xlab = 'd')
+title('GCV Error trend')
+```
+
+Considering what has been said above about the GCV problem, we decide to select $d = 6$ as the optimal value, since as d increases we would be led to always choose the last value considered.
+```{r, include = F, echo = F, comment = NA}
+ds[which.min(GCV)] ## optimal GCV degree
+```
+
+#### 4. Spline regression Vs. Polynomial regression
+We compare the best spline fit with the GCV-tuned polynomial regression.
+```{r, echo = F}
+## Spline (d = 3, q = 6)
+X              <- design.mat(data, 3, 6)
+sp_optimal     <- lm(y ~ ., data = X)
+poly_optimal_6 <- lm(y ~ poly(x, degree = 6), data = data)
+poly_optimal_9 <- lm(y ~ poly(x, degree = 9), data = data)
+```
+
+```{r, echo = F, fig.align = 'center'}
+## Plot
+plot(X$y ~ X$X2,
+     main = 'Spline Vs Polynomial Regression',
+     xlab = 'x',
+     ylab = 'y',
+     pch = 20, col = 'gray')
+
+## Spline
+lines(sp_optimal$fitted.values ~ X$X2,
+      col = 2, lwd = 2)
+
+## Poly (6) (tipo 1sd)
+lines(poly_optimal_6$fitted.values ~ X$X2,
+      col = 3, lwd = 2)
+legend('bottomleft', c('Spline (d = 3, q = 6)',
+                       'Poly (d = 6)'),
+       col = c(2,3,4), pch = 19, cex = 0.8, bty = 'n')
+```
+
+The distribution is strongly heteroskedastic, that is, with non-constant variance as the value of x increases. Graphically, heteroskedasticity can be seen from the cone structure of the distribution.
+
+We can see that the two regressions have a similar general trend, although the spline regression is smoother and better approximates the distribution of the data at some points.
+
+Also, spline regression can be modeled more by choosing the location of the nodes. In fact, given that the distribution is heteroskedastic and that the nodes have been selected equally spaced, it is possible to select a smaller number of nodes at the beginning of the distribution, since in those values the distribution is quite simple and then move more nodes towards the right side of the distribution, where the structure to be captured is more complicated.
+
+### Part 2
+#### 1.
+We drop the first 400 observations and saving the others in a dataframe calles $wmap_{sb}$.
+Then, we consider a simple linear model $f(x|\theta) = \theta_0 + \theta_1\ x$.
+```{r, include = F}
+## Subset of data
+wmap_sb <- data[401:nrow(data), ]
+nrow(wmap_sb)
+```
+
+#### 2. Fit simple linear model
+```{r, include = F}
+## Fit linear model
+lin_fit <- lm(y ~ x, data = wmap_sb)
+```
+
+```{r, echo = F, comment = NA}
+## Summary
+summary(lin_fit)
+```
+
+We can see that the hypothesized model is unable to capture the information contained in the data. In fact, the $R^{2}$ is close to zero, the range of residuals is very wide and the median is very different from zero, suggesting that there is no normal distribution of the residuals.
+
+```{r, echo = F, comment = NA, fig.width = 13, fig.height = 10}
+## Plot
+par(mfrow = c(2,2))
+plot(lin_fit)
+```
+
+The QQ-Plot confirms the non-normal distribution of the residuals, while from the plot with the predicted values we can see their heteroskedastic structure.
+
+```{r, echo = F, fig.align = 'center'}
+## Data Scatter and linear fit
+par(mfrow = c(1,1))
+plot(wmap_sb$x, wmap_sb$y,
+     xlab = 'x',
+     ylab = 'y', pch = 20, col = 'gray')
+lines(lin_fit$fitted.values ~ wmap_sb$x, col = 2, lwd = 2)
+title('Linear fit')
+```
+
+We confirm what has been said, the model is too simple and it's unable to explain the target variable which has a lot of variability in the last observations.
+
+```{r, include = F}
+## Mean-squared error
+MSEp_hat <- mean((wmap_sb$y - lin_fit$fitted.values)^2)
+```
+
+#### 3.
+We add the non-parametric model to the plot that we made before.
+```{r, include = F}
+## Spline regression (Best parameters)
+res   <- list()
+q     <- rep(0, 10)
+value <- rep(0, 10)
+
+for (d in 1:10){
+  f_hat    <- KFCV(wmap_sb, d, 15, 5)
+  q[d]     <- which.min(f_hat)
+  value[d] <- min(f_hat)
+}
+pf     <- cbind.data.frame(q, value)
+best_d <- which.min(pf$value)
+best_q <- pf[best_d, 1]
+```
+
+```{r, include = F}
+## Generate design matrix
+X <- design.mat(wmap_sb, best_d, best_q)
+
+## Fit the spline with degree = best_d
+f_hat <- lm(X$y ~ ., data = X)
+
+## Mean-squared error
+MSEnp_hat <- mean((wmap_sb$y - f_hat$fitted.values)^2)
+```
+
+```{r, echo = F, fig.align = 'center'}
+## Data Scatter and linear fit
+plot(wmap_sb$x, wmap_sb$y,
+     xlab = 'x',
+     ylab = 'y', pch = 20, col = 'gray')
+lines(lin_fit$fitted.values ~ wmap_sb$x, col = 2, lwd = 2)
+lines(f_hat$fitted.values ~ wmap_sb$x, col = 3, lwd = 2)
+legend('bottomleft', c(paste0('Spline (d = ', best_d,
+                              ', ', 'q = ', best_q, ')'),
+                       paste0('Linear Model')),
+       col = c(3,2), pch = 19, cex = 0.8, bty = "n")
+title('Parametric Vs. Non-Parametric')
+```
+
+It's evident that the non-parametric regression manages to better capture the complicated structure of data than the linear model.
+
+#### 4.
+We calculate $\hat{t}$.
+```{r, comment = NA}
+## Estimate t_hat
+t_hat <- MSEp_hat - MSEnp_hat
+cat(t_hat)
+```
+
+```{r, include = F, comment = NA}
+## Model comparison
+AIC(lin_fit, f_hat)
+BIC(lin_fit, f_hat)
+```
+
+```{r, include = F}
+## Plot
+par(mfrow = c(1,2))
+plot(lin_fit$residuals)
+plot(f_hat$residuals)
+```
+
+#### 5.
+Here we have a function to simulate new dataset.
+```{r}
+## Inputs: linear model (lin_fit), x values at which to
+## simulate(sim_x)
+## Outputs: Data frame with columns x and y
+sim_lm <- function(lin_fit, sim_x) {
+  n <- length(sim_x)
+  sim_fr <- data.frame(x = sim_x)
+  sigma <- summary(lin_fit)$sigma
+  y_sim <- predict(lin_fit, newdata = sim_fr)
+  y_sim <- y_sim + rnorm(n, 0, sigma)     ## Add noise
+  sim_fr <- data.frame(sim_fr, y = y_sim) ## Adds y column
+  return(sim_fr)
+}
+```
+
+```{r, comment = NA}
+## Bootstrap
+B <- 1000
+MSEp_tilde  <- rep(0, B) 
+MSEnp_tilde <- rep(0, B) 
+t_tilde     <- rep(0, B)
+
+for (b in 1:B){
+  ## New data
+  X_new <- sim_lm(lin_fit, wmap_sb$x)
+  ## Fit linear model
+  lin_fit <- lm(X_new$y ~ ., data = X_new)
+  ## MSE parametric model
+  MSEp_tilde[b] <- mean((X_new$y -
+                           lin_fit$fitted.values)^2)
+  ## Generate design matrix
+  X <- design.mat(wmap_sb, best_d, best_q)
+  ## Fit the spline with degree = 3
+  nlin_fit <- lm(X$y ~ ., data = X)
+  ## MSE non parametric model
+  MSEnp_tilde[b] <- mean((X_new$y -
+                            nlin_fit$fitted.values)^2)
+  ## Estimate T
+  t_tilde[b] <- MSEp_tilde[b] - MSEnp_tilde[b]
+}
+```
+
+#### 6.
+```{r, comment = NA}
+## Bootstrapped p-value
+res <- mean(t_tilde > t_hat)
+cat(res)
+```
+
+We reject the  null hypothesis $H_0$ with a level of $\alpha = 0.05$, so we can say that the parametric model is not correct and this is coherent with what was said before. This means that there is some non-linear structure (bumps) into the distribution that cannot be captured by the linear model.
