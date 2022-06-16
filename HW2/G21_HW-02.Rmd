@@ -1,0 +1,438 @@
+---
+title: "HW 02 - Statistical Learning"
+author: "G21: Davide Mascolo - Antonella Cruoglio - Giuliana Iovino - Mario Napoli"
+date: "26 maggio 2022"
+output: html_document
+geometry: margin = 1 cm
+---
+
+```{r, setup, echo = F}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+```
+
+```{r, echo = F, warning = F, message = F}
+## Utils
+library(data.table)
+library(dplyr)
+library(kernlab)
+library(caret)
+library(doParallel)
+library(e1071)
+library(ggplot2)
+library(kableExtra)
+```
+
+## Part A
+We pick randomly *m = 10* observations from the training set which will be used for the second part of the homework. As we can se, there are *1561 observations* and *7042 features*. In order to try to reproduce the 2020-winning solution, we essentially worked on a two steps procedure, with a nonlinear dimensionality reduction followed by a SVM regression.
+
+```{r, echo = F, comment = NA}
+## Load Data
+x_train <- fread("train4final_hw.csv")
+x_test  <- fread("test4final_hw.csv")
+cat(dim(x_train))
+```
+
+As a first approach we tried to use all the features in the dataset on which we have applied the KPCA technique.
+Despite this we have obtained a bad performance so we decided to go on with another approach.
+
+We have tried to find a subset of relevant features that are able to explain the target variable. So, since we don't have the domain knowledge, we tried to apply the shrinkage methods to do features selection. In particular, we have applied Penalized Regression like *Lasso* and *Elastic Net*, followed by a SVM, but also in this case we didn't get a good performance.
+
+Then, in order to identify good predictors, we tried to use different subgroups of features. We have used the statistical properties of frequency spectrum, then the group of statistics extracted from the STFT and as a last attempt the statistical properties of the signal.
+
+At this point, we have not obtained a satisfying result so we decided to make a feature engineering operation on the *Mel-frequency cepstral coefficients*. We tried to reduce the huge number of features summarizing the information for each mel frequency for each of the 171 temporal instants on which is registered. We have used different statistics like **Mean**, **Variance**, **Standard Deviation** and **Range**. Then, we note that the mean was the variable most capable to explain the tempo variable.
+[Reference](https://asa.scitation.org/doi/pdf/10.1121/10.0005201)
+
+```{r, include = F}
+## We pick 10 observations
+idx_10 <- sample(1:nrow(x_train), size = 10)
+
+## Put them aside
+df_train    <- x_train[-idx_10, ]
+df_10       <- x_train[idx_10, ]
+
+## We don't consider these features in the KPCA
+train <- df_train[,-c("id", "genre", "tempo")]
+```
+
+Here, we can see the features engineering of the mel variables. From this point we consider only this group of variables and genre variable for our analysis.
+
+```{r}
+## Transform Data (train)
+dt  <- train
+idx <- 1
+for (i in 1:40){
+    dt[,paste("mel", i, sep = "_")] = rowMeans(dt[, idx:(idx+170)], na.rm = TRUE)
+    idx <- idx + 170
+     }
+```
+
+```{r, include = F}
+## New Dataset with only mel features
+mel_train       <- dt[,7040:7079]
+```
+
+```{r eval = F, include = F}
+## Kernel PCA
+pca_train <- kpca(~ ., data = mel_train,
+                  kernel = "polydot",
+                  kpar = list(degree = 0.4,
+                              scale = 2,
+                              offset = 1))
+
+## Get the principal component vectors
+df_pca_train         <- data.frame(pcv(pca_train))
+names(df_pca_train)  <- paste("Comp",
+                              1:ncol(df_pca_train),
+                              sep = ".")
+```
+
+```{r, eval = F, include = F}
+## Select the k components
+explained_var       <- eig(pca_train)
+explained_var_ratio <- explained_var / sum(explained_var)
+explained_var_cum   <- cumsum(explained_var_ratio)
+
+## Plot
+(k <- min(which(explained_var_cum >= 0.85)))
+plot(explained_var_cum, type = "l",
+     xlab = "Number of Components",
+     ylab = "Cumulative Variance",
+     xlim = c(1, 100))
+abline(v = k, col = "red", lwd = 2)
+```
+
+```{r, eval = F, include = F}
+## We select the first k components
+df_train_pca <- df_pca_train[ , 1:k]
+
+## Adding features
+df_train_pca$tempo <- df_train$tempo
+df_train_pca$genre <- as.factor(df_train$genre)
+
+## Check
+cat(dim(df_train_pca))
+```
+
+```{r, eval = FALSE, include = FALSE}
+## KFCV
+tr <- trainControl(method = "repeatedcv",
+                   number = 10,
+                   repeats = 100,
+                   allowParallel = T)
+
+## Grid tuning parameter
+## C        <- c(0.1, 1, 10, 100)
+## sigma    <- c(0.0001, 0.001, 0.01, 0.1, 1)
+C        <- 10
+sigma    <- 0.1
+Grid_rad <- expand.grid(C = C,sigma = sigma)
+
+## SVM Regression Radial
+svm_rad <- train(tempo ~ ., data = df_train_pca, 
+                 method = "svmRadial", 
+                 tuneGrid = Grid_rad,
+                 trControl = tr)
+```
+
+```{r, include = FALSE}
+## We consider only the mel features and we don't compute ## the KPCA.
+mel_train$tempo <- df_train$tempo
+mel_train$genre <- as.factor(df_train$genre)
+```
+
+```{r, include = F}
+## Parallel
+nocores <- detectCores() - 2
+cl      <- makeCluster(nocores)
+registerDoParallel(cl)
+```
+
+We have used the 10 Fold cross validation repeated 20 times to do Grid Search in order to find the best kernel and best parameters of SVM to use.
+The kernel that performed best is the Radial with a value of C equal to 10 and a value of sigma equal to 0.01. So, we retrained the method with these parameters values through a 10 Fold cross validation repeated 100 times.
+
+```{r, echo = F, comment = NA}
+## KFCV
+## tr <- trainControl(method = "repeatedcv",
+##                    number = 10,
+##                    repeats = 20,
+##                    allowParallel = T)
+
+## KFCV
+tr <- trainControl(method = "repeatedcv",
+                   number = 10,
+                   repeats = 100,
+                   allowParallel = T)
+
+## Grid tuning parameter
+## C        <- c(0.1, 1, 10, 100)
+## sigma    <- c(0.0001, 0.001, 0.01, 0.1, 1)
+C        <- 10
+sigma    <- 0.01
+Grid_rad <- expand.grid(C = C, sigma = sigma)
+
+## SVM Regression Radial
+svm_rad <- train(tempo ~ ., data = mel_train, 
+                 method = "svmRadial", 
+                 tuneGrid = Grid_rad,
+                 trControl = tr)
+## Check the result
+svm_rad
+
+## SVM Regression Linear
+## C        <- c(0.1, 1, 10, 100, 400, 1000)
+## Grid_rad <- expand.grid(C = C)
+## svm_lin  <- train(tempo ~ ., data = mel_train, 
+##                  method = "svmLinear", 
+##                  tuneGrid = Grid_rad,
+##                  trControl = tr)
+
+## SVM Regression Poly
+## C        <- c(0.1, 1, 10, 100, 400, 1000)
+## degree   <- c(2, 3, 4, 5)
+## scale    <- c(0.001, 0.01, 0.1, 1)
+## Grid_rad <- expand.grid(degree = degree, C = C,
+##                         scale = scale)
+## svm_pol  <- train(tempo ~ ., data = mel_train, 
+##                   method = "svmPoly", 
+##                   tuneGrid = Grid_rad,
+##                   trControl = tr)
+```
+
+These are the results obtained, we have a much better performance with respect to the previous tests. We did the same engineering operation for mel features also on the test set.
+
+```{r}
+## Transform Data (test)
+dt2 <- x_test[, -c("id", "genre")]
+idx <- 1
+for (i in 1:40){
+    dt2[,paste("mel", i, sep = "_")] = rowMeans(dt2[, idx:(idx+170)], na.rm = TRUE)
+    idx <- idx + 170
+     }
+```
+
+```{r, include = F}
+## New Dataset with only mel features
+mel_test <- dt2[,7040:7079]
+
+## Extract id
+id <- x_test$id
+```
+
+```{r, include = F}
+## Adding Genre
+mel_test$genre <- as.factor(x_test$genre)
+```
+
+These are the first ten predictions on the test set.
+
+```{r, echo = F, comment = NA}
+## Predict
+pred <- predict(svm_rad, mel_test)
+
+## Final CSV
+G21_predict <- cbind.data.frame(id = id, target = pred)
+kable(head(G21_predict, 10), align = "cc") %>% 
+  kable_styling()
+
+## Export
+write.csv(G21_predict, file = "G21_predict.csv",
+          row.names = F)
+```
+
+## Part B
+### Split Conformal Prediction for Regression
+
+#### Point 1
+Starting from the best model used in the Part A, we implement the *Split conformal Prediction for Regression* algorithm.
+We have created a function to train the previous model with the best couple values of parameters. Also in this case, we transformed the data with the same operations used in the previous cases.
+
+```{r}
+## Train Control
+## KFCV
+tr <- trainControl(method = "cv",
+                   number = 10)
+
+## Best Parameters
+C        <- 10
+sigma    <- 0.01
+Grid_rad <- expand.grid(C = C, sigma = sigma)
+
+## SVM
+svm_reg <- function(data){
+  
+  ## Our best function implementation of SVM
+  return(train(tempo ~ ., data = data, 
+                 method = "svmRadial", 
+                 tuneGrid = Grid_rad,
+                 trControl = tr))
+}
+```
+
+```{r, include = F}
+## Transform Data
+dt3 <- df_10[, -c("id", "genre", "tempo")]
+idx <- 1
+for (i in 1:40){
+    dt3[,paste("mel", i, sep="_")] = rowMeans(dt3[,
+    idx:(idx+170)], na.rm = TRUE)
+    idx <- idx + 170
+     }
+```
+
+```{r, include = F}
+## New Dataset with only mel features
+mel_train_10       <- dt3[,7040:7079]
+```
+
+```{r, include = F}
+## Adding Features
+mel_train_10$tempo <- df_10$tempo
+mel_train_10$genre <- factor(df_10$genre,
+                             levels = c(1:20))
+```
+
+We implemented the function to make the Split Conformal Prediction.
+
+```{r}
+## Predicting with Confidence
+conformal_split <- function(data, alpha, reg_mod, y,
+                            x_new){
+  
+  ## INPUT: 
+  ## data:    dataset
+  ## alpha:   miscoverage level alpha (0,1)
+  ## reg_mod: regression algorithm
+  ## y:       response variable vector
+  ## x_new:   new data points
+  
+  ## OUTPUT:
+  ## list of predictions band over x (lower and upper)
+  
+  n <- nrow(data)
+  
+  ## Randomly split D_n into two equal sized subsets
+  idx <- sample(1:n, as.integer(n/2))
+  D_1 <- data[idx, ]
+  D_2 <- data[-idx, ]
+  
+  y_2 <- y[-idx]
+  
+  ## Train on D_1
+  model <- reg_mod(D_1) ## regression train function
+  
+  ## Predict and evaluate residuals on D_2
+  predictions <- predict(model, newdata =
+                           D_2[,-c("tempo")])
+  res         <- abs(y_2 - predictions)
+
+  ## d = the k-th smallest value of {Ri}i where
+  ## k = d(n/2 + 1)(1 - alpha)
+  o <- order(res) ## ordered indexes
+  k <- ceiling(((n/2)+1) * (1 - alpha))
+  d <- res[o][k]
+
+  lo       <- rep(NA, nrow(x_new))
+  up       <- rep(NA, nrow(x_new))
+  ## predictions on new data
+  pred_new <- predict(model, newdata = x_new) 
+
+  for (i in 1:nrow(x_new)) {
+    lo[i] <- pred_new[i] - d 
+    up[i] <- pred_new[i] + d 
+    
+  }
+  return(list(lower = lo, upper = up)) 
+}
+```
+
+We apply the algorithm of Conformal Prediction to 10 observations that we set aside before from the training set.
+
+```{r, comment = NA}
+## Seed
+set.seed(1234)
+
+## Check (m = 10 observations)
+cp_10 <- as.data.frame(conformal_split(mel_train,
+                                       alpha = 0.3,
+                              reg_mod = svm_reg,
+                              y = mel_train$tempo,
+                              x_new = mel_train_10[
+                                ,-c("tempo")]),
+                       col.names = c("Lower", "Upper"))
+
+## Adding target and id variables
+cp_10 <- cbind.data.frame(Id = df_10$id,
+                          Value = mel_train_10$tempo,
+                          cp_10)
+```
+
+```{r, echo = F}
+## Check
+kable(cp_10, allign = "ccc") %>% 
+  kable_styling()
+```
+
+We can see that not all the intervals cover the actual response. We know that $\alpha \in (0, 1)$ is the miscoverage level, that is the proportion of the time that the interval doesn't contains the true value of interest.
+Of course, we note that if we decrease the value of $\alpha$ we have that more actual response values falling in the intervals, but the interval is larger. In this case we set $\alpha = 0.3$.
+
+```{r, echo = F, fig.align = "center"}
+## Plot
+ggplot(cp_10, aes(x = factor(Id), y = Value))+
+  geom_point() +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper),
+                color = "red", width = 0.2) + 
+  xlab("Id")
+```
+
+#### Point 2
+We pick randomly 100 observations from the test set and buil their predictive sets.
+
+```{r, include = F}
+## We pick 100 observations
+## Index
+idx_test_100 <- sample(1:nrow(x_test), size = 100)
+
+## Data
+df_100_test  <- x_test[idx_test_100, ]
+```
+
+```{r}
+## Transform Data
+dt4 <- df_100_test[, -c("id", "genre")]
+idx <- 1
+for (i in 1:40){
+    dt4[,paste("mel", i, sep="_")] = rowMeans(dt4[,
+    idx:(idx+170)], na.rm=TRUE)
+    idx <- idx + 170
+     }
+```
+
+```{r, include = F}
+## New Dataset with only mel features
+mel_test_100 <- dt4[,7040:7079]
+```
+
+```{r, include = F}
+## Adding Feature
+mel_test_100$genre <- factor(df_100_test$genre,
+                             levels = c(1:20))
+```
+
+We apply the algorithm of Conformal Prediction to 100 observations that we picked randomly from the test set. We see only the first 20 predictions and we cannot do the same plot of the previous case because in the test set we don't have the target variable.
+
+```{r, comment = NA}
+## Check (m = 100 observations)
+cp_100 <- as.data.frame(conformal_split(mel_train,
+                                        alpha = 0.3,
+                reg_mod = svm_reg,
+                y = mel_train$tempo,
+                x_new = mel_test_100),
+                col.names = c("Lower", "Upper"))
+```
+
+```{r, echo = F}
+## Check
+kable(head(cp_100, 20), allign = "cc") %>%
+  kable_styling()
+```
