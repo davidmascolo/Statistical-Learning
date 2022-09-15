@@ -1,0 +1,1096 @@
+---
+title: "Who is walking?"
+subtitle: "Statistical Learning Project"
+author: "G-21  Cruoglio Antonella - Iovino Giuliana - Mascolo Davide - Napoli Mario"
+date: '2022-09-14'
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+Walking style, or gait, is known to differ between individuals and to be fairly stable, where as deliberate imitation of an other person's walking style is difficult.
+Monitoring these movements can be used, like a fingerprint or retinal scan, to recognize and clearly identify or verify an individual.
+
+Typically, vision based methods are used for gait recognition.
+In this work we try to identify a person using acceleration signals from a normal walk.
+In the past, it was expensive to collect sensor data, But now thanks to personal tracking devices, like smartphone, we are able to get these data more easily.
+
+```{r, echo = F, message = F}
+## Utils
+library(readxl)
+library(adept)
+library(ggplot2)
+library(gridExtra)
+library(tidyverse)
+library(e1071)
+library(caret)
+library(plotly)
+library(factoextra)
+library(cluster)
+library(iml)
+library(randomForest)
+library(cvms)
+```
+
+### Data Collection
+
+In order to collect data, we used the `Arduino Science Journal` app to record data from a triaxial accelerometer to measure acceleration.
+The data from the accelerometer includes the acceleration along the x-axis, y-axis, and z-axis.
+These axes capture the horizontal movement of the user (x-axis), forward/backward movement (y-axis), and upward/downward movement (z-axis).
+
+Each subject (the four component of our group) carrying the phone in their right pant pocket.
+
+Each individual generated a .csv file, containing the following information:
+
+-   **relative_time**: Timestamp (in m/s)
+-   **AccX**: Acceleration on the x-axis
+-   **AccY**: Acceleration on the y-axis
+-   **AccZ**: Acceleration on the z-axis
+-   **LinearAccelerometerSensor**: Linear accelerometer sensor
+
+```{r, echo = F}
+## Load Data
+dav_df   <- read.csv("Davide_Walks_pt2.csv", header = T)
+anto_df  <- read.csv("Antonella_Walks_pt2.csv",
+                     header = T)
+mario_df <- read.csv("Mario_Walks_pt2.csv", header = T)
+giu_df   <- read.table("GiulianaFinale.txt",
+                       header = T, sep = ",")
+```
+
+### Data wrangling
+
+We removed the first and the last minute registration, for each dataset that correspond to time used to place the sensors and to switch off the registration.
+Furthemore, we have transformed the *relative time* variable from milliseconds to seconds.
+
+```{r, echo = F}
+## Data Wrangling
+data_seconds <- function(dat){
+  dat$relative_time <- dat$relative_time / 1000
+  colnames(dat)[1]  <- "Seconds"
+  return(dat)
+}
+
+data_cut <- function(dat, rt = 60000){
+  dat <- dat %>% 
+    filter(relative_time >= rt, relative_time <=
+           relative_time[nrow(dat)] - rt)
+  return(dat)
+}
+```
+
+```{r, echo = F}
+## Apply
+dav_df   <- data_cut(dav_df)
+anto_df  <- data_cut(anto_df)
+mario_df <- data_cut(mario_df)
+giu_df   <- data_cut(giu_df)
+
+dav_df   <- data_seconds(dav_df)
+anto_df  <- data_seconds(anto_df)
+mario_df <- data_seconds(mario_df)
+giu_df   <- data_seconds(giu_df)
+```
+
+### EDA
+
+In this step, we have done different plots to understand the behavior of data.
+
+<p>&nbsp;</p>
+
+```{r, echo = F, fig.width = 12, fig.height = 6, fig.align = "center"}
+## EDA - AccX
+
+## Mario
+p1 <- ggplot(mario_df, aes(x = Seconds,
+                           y = AccX)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc X - Mario") +
+  theme_grey()
+
+## Anto
+p2 <- ggplot(anto_df, aes(x = Seconds,
+                          y = AccX)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc X - Antonella") +
+  theme_grey()
+
+## Giu
+p3 <- ggplot(giu_df, aes(x = Seconds,
+                         y = AccX)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc X - Giuliana") +
+  theme_grey()
+
+## Dav
+p4 <- ggplot(dav_df, aes(x = Seconds,
+                         y = AccX)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc X - Davide") +
+  theme_grey()
+
+## Plot
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+<p>&nbsp;</p>
+
+```{r, echo = F, fig.width = 12, fig.height = 6, fig.align = "center"}
+## EDA - AccY
+
+## Mario
+p5 <- ggplot(mario_df, aes(x = Seconds,
+                           y = AccY)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc Y - Mario") +
+  theme_grey()
+
+## Anto
+p6 <- ggplot(anto_df, aes(x = Seconds,
+                          y = AccY)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc Y - Antonella") +
+  theme_grey()
+
+## Giu
+p7 <- ggplot(giu_df, aes(x = Seconds,
+                         y = AccY)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc Y - Giuliana") +
+  theme_grey()
+
+## Dav
+p8 <- ggplot(dav_df, aes(x = Seconds,
+                         y = AccY)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc Y - Davide") +
+  theme_grey()
+
+## Plot
+grid.arrange(p5, p6, p7, p8, ncol = 2)
+```
+
+<p>&nbsp;</p>
+
+```{r, echo = F, fig.width = 12, fig.height = 6, fig.align = "center"}
+## EDA - AccZ
+
+## Mario
+p9 <- ggplot(mario_df, aes(x = Seconds,
+                           y = AccZ)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc Z - Mario") +
+  theme_grey()
+
+## Anto
+p10 <- ggplot(anto_df, aes(x = Seconds,
+                           y = AccZ)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc Z - Antonella") +
+  theme_grey()
+
+## Giu
+p11 <- ggplot(giu_df, aes(x = Seconds,
+                          y = AccZ)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc Z - Giuliana") +
+  theme_grey()
+
+## Dav
+p12 <- ggplot(dav_df, aes(x = Seconds,
+                          y = AccZ)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Acc Z - Davide") +
+  theme_grey()
+
+## Plot
+grid.arrange(p9, p10, p11, p12, ncol = 2)
+```
+
+<p>&nbsp;</p>
+
+```{r, echo = F, fig.width = 12, fig.height = 6, fig.align = "center"}
+## EDA - Linear Accelerometer
+
+## Mario
+p13 <- ggplot(mario_df, aes(x = Seconds,
+                           y = LinearAccelerometerSensor)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Linear Accelerometer - Mario") +
+  theme_grey()
+
+## Anto
+p14 <- ggplot(anto_df, aes(x = Seconds,
+                           y = LinearAccelerometerSensor)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Linear Accelerometer - Antonella") +
+  theme_grey()
+
+## Giu
+p15 <- ggplot(giu_df, aes(x = Seconds,
+                          y = LinearAccelerometerSensor)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Linear Accelerometer - Giuliana") +
+  theme_grey()
+
+## Dav
+p16 <- ggplot(dav_df, aes(x = Seconds,
+                          y = LinearAccelerometerSensor)) +
+  geom_line(col = "#3333FF") +
+  xlab("Seconds") +
+  ylab(expression(m/s^2)) +
+  ggtitle("Linear Accelerometer - Davide") +
+  theme_grey()
+
+## Plot
+grid.arrange(p13, p14, p15, p16, ncol = 2)
+```
+
+<p>&nbsp;</p>
+
+### Feature engineering
+
+In order to extract features from these data, we used windowing with overlapping.
+We propose to extract the following features:
+
+-   **mean** of the acceleration
+-   **sd** of the acceleration
+-   **root mean square** of the acceleration
+-   **absolute difference** of the acceleration
+
+We computed these statistics on each of the three axes and we got 12 features.
+
+#### Windowing
+
+A straight-forward data preparation approach that was used for classical machine learning methods involves dividing the input signal data into windows of signals, where a given window may have one to a few seconds of observation data.
+This is often called a *sliding window*.
+
+In this technique we divide the data into smaller sets of the same size.
+Individual windows may overlap in time in order to reduce the loss of information at the edges of the window; the overlap between windows is set to be at 50% by default.
+
+The window size is an important parameter to choose; for this reason, we did a grid search on it, in order to find the most performing size.
+
+```{r, echo = F}
+## Windowing
+sec_to_size <- function(dat, s){
+  num_window <- (tail(dat$Seconds, 1) -
+                      head(dat$Seconds, 1)) / s
+  ws <- ceiling(nrow(dat) / num_window)
+  return(ws)
+}
+
+## Window Size
+window_size <- function(dat, ws, over = ws / 2){
+  bin       <- ceiling(nrow(dat) / (ws - ws/4)) - 1
+  start_idx <- rep(0, bin)
+  end_idx   <- rep(0, bin)
+  
+  start_idx[1] <- 0
+  end_idx[1]   <- ws
+  cnt          <- 2
+  
+  while (cnt <= bin){
+    start_idx[cnt] <- end_idx[cnt - 1] - over/2
+    end_idx[cnt]   <- end_idx[cnt - 1] + ws - over/2
+    cnt <- cnt + 1
+  }
+
+  start_idx[cnt] <- end_idx[cnt - 1] - over/2
+  end_idx[cnt]   <- nrow(dat)
+
+  res <- list(start_idx, end_idx)
+  return(res)
+}
+```
+
+```{r, echo = F}
+## Generating Features
+features_gen <- function(dat, idx){
+  start <- idx[[1]]
+  start[1] <- 1
+  end   <- idx[[2]]
+  cnt   <- 1
+  n_idx <- length(idx[[1]])
+  
+  ## Features
+  ## Mean
+  mean_Accx <- rep(NA, n_idx)
+  mean_Accy <- rep(NA, n_idx)
+  mean_Accz <- rep(NA, n_idx)
+  
+  ## Sd
+  sd_Accx <- rep(NA, n_idx)
+  sd_Accy <- rep(NA, n_idx)
+  sd_Accz <- rep(NA, n_idx)
+  
+  ## Rms
+  rms_Accx <- rep(NA, n_idx)
+  rms_Accy <- rep(NA, n_idx)
+  rms_Accz <- rep(NA, n_idx)
+
+  ## Absolute difference
+  absd_Accx <- rep(NA, n_idx)
+  absd_Accy <- rep(NA, n_idx)
+  absd_Accz <- rep(NA, n_idx)
+
+  
+  while (cnt <= n_idx){
+    ## Mean
+    mean_Accx[cnt] <- mean(dat$AccX[start[cnt]:
+                                      end[cnt] - 1])
+    mean_Accy[cnt] <- mean(dat$AccY[start[cnt]:
+                                      end[cnt] - 1])
+    mean_Accz[cnt] <- mean(dat$AccZ[start[cnt]:
+                                      end[cnt] - 1])
+    
+    ## Sd
+    sd_Accx[cnt] <- sd(dat$AccX[start[cnt]:
+                                  end[cnt] - 1])
+    sd_Accy[cnt] <- sd(dat$AccY[start[cnt]:
+                                  end[cnt] - 1])
+    sd_Accz[cnt] <- sd(dat$AccZ[start[cnt]:
+                                  end[cnt] - 1])
+    
+    ## Rms
+    rms_Accx[cnt] <- sqrt((sum(dat$AccX[start[cnt]:
+                        end[cnt] -1]^2))/
+                          length(start[cnt]:end[cnt] - 1))
+    rms_Accy[cnt] <- sqrt((sum(dat$AccY[start[cnt]:
+                        end[cnt] -1]^2))/
+                          length(start[cnt]:end[cnt] - 1))
+    rms_Accz[cnt] <- sqrt((sum(dat$AccZ[start[cnt]:
+                        end[cnt] -1]^2))/
+                          length(start[cnt]:end[cnt] - 1))
+
+    ## Absolute difference
+    absd_Accx[cnt] <- sum(abs(dat$AccX[start[cnt]:
+  end[cnt] - 1]-mean_Accx[cnt]))/length(start[cnt]:end[cnt] - 1)
+    absd_Accy[cnt] <- sum(abs(dat$AccX[start[cnt]:
+  end[cnt] - 1]-mean_Accy[cnt]))/length(start[cnt]:end[cnt] - 1)
+    absd_Accz[cnt] <- sum(abs(dat$AccX[start[cnt]:
+  end[cnt] - 1]-mean_Accz[cnt]))/length(start[cnt]:end[cnt] - 1)
+
+    cnt <- cnt + 1
+  }
+  
+  df <- data.frame(mean_Accx, mean_Accy, mean_Accz,
+                   sd_Accx, sd_Accy, sd_Accz,
+                   rms_Accx, rms_Accy, rms_Accz,
+                   absd_Accx, absd_Accy, absd_Accz)
+
+  return (df)
+}
+```
+
+```{r, echo = F}
+## Generate new features
+new_features <- function(dav_df, anto_df,
+                         mario_df, giu_df, s){
+  
+  ## windowing
+  res          <- sec_to_size(dav_df, s)
+  window_dav   <- window_size(dav_df, res)
+  window_anto  <- window_size(anto_df, res)
+  window_mario <- window_size(mario_df, res)
+  window_giu   <- window_size(giu_df, res)
+  
+  ## dataset
+  dav_df_final   <- features_gen(dav_df, window_dav)
+  anto_df_final  <- features_gen(anto_df, window_anto)
+  mario_df_final <- features_gen(mario_df, window_mario)
+  giu_df_final   <- features_gen(giu_df, window_giu)
+  
+  ## Add target variable
+  dav_df_final$Id    <- rep(as.factor(1),
+                          nrow(dav_df_final))
+  anto_df_final$Id   <- rep(as.factor(2),
+                          nrow(anto_df_final))
+  mario_df_final$Id  <- rep(as.factor(3),
+                          nrow(mario_df_final))
+  giu_df_final$Id    <- rep(as.factor(4),
+                          nrow(giu_df_final))
+  
+  ## Merge all data
+  dat_final <- rbind(dav_df_final,
+                     anto_df_final,
+                     mario_df_final,
+                     giu_df_final)
+
+  ## Drop NA
+  dat_final <- na.omit(dat_final)
+  return(dat_final)
+}
+```
+
+```{r, echo = F}
+## Apply
+dat_final_01  <- new_features(dav_df, anto_df,
+                               mario_df, giu_df, 0.1)
+dat_final_02  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 0.2)
+dat_final_03  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 0.3)
+dat_final_04  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 0.4)
+dat_final_05  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 0.5)
+dat_final_06  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 0.6)
+dat_final_07  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 0.7)
+dat_final_08  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 0.8)
+dat_final_09  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 0.9)
+dat_final_10  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1)
+dat_final_11  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.1)
+dat_final_12  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.2)
+dat_final_13  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.3)
+dat_final_14  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.4)
+dat_final_15  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.5)
+dat_final_16  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.6)
+dat_final_17  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.7)
+dat_final_18  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.8)
+dat_final_19  <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 1.9)
+dat_final_2   <- new_features(dav_df, anto_df,
+                              mario_df, giu_df, 2)
+```
+
+### Model training
+
+Many classifiers were taken into consideration, in order to solve this multi-class problem.
+
+-   Multinomial Logit
+-   Linear Discriminant Analysis
+-   K-nearest Neighbors
+-   Support Vector Machine
+-   Random Forest
+
+First, we split the dataset into train (80%) and test (20%).
+Then we used `caret` to train the models and find the best parameters for K-NN and SVM, using 5-Fold Cross Validation.
+The number of mtry (number of variables randomly sampled as candidates at each split) for the Random Forest is set to $\sqrt{\text{number of features}}$, while the number of tree is set to 500.
+
+```{r, echo = F}
+## Splitting and Modelling
+fit_model <- function(dat){
+  ## Splitting
+  idx <- createDataPartition(dat$Id, p = 0.8, list = F)
+  
+  ## Train
+  dat_final_train <- dat[idx, ]
+  
+  ## Test
+  dat_final_test  <- dat[-idx, ]
+  y_test          <- dat_final_test$Id
+  dat_final_test$Id  <- NULL
+  
+  ## KFCV
+  train_control <- caret::trainControl(method = "cv",
+                                       number = 5,
+                                       verboseIter = F)
+  
+  ## Multinomial Logit Model
+  logit_mult <- caret::train(Id ~.,
+                             data = dat_final_train,
+                      trControl = train_control,
+                      method = "multinom",
+                      trace = F)
+  ## Predict
+  pred_logit <- predict(logit_mult,
+                        newdata = dat_final_test)
+  ## Evaluation Metrics
+  cm_logit <- caret::confusionMatrix(y_test, pred_logit)
+  
+  
+  ## LDA
+  lda_model <- caret::train(Id ~., data = dat_final_train,
+                    trControl = train_control,
+                    method = "lda")
+  ## Predict
+  pred_lda <- predict(lda_model,
+                      newdata = dat_final_test)
+  ## Evaluation Metrics
+  cm_lda <- caret::confusionMatrix(y_test, pred_lda)
+  
+  
+  ## Knn
+  Knn_model <- caret::train(Id ~., data = dat_final_train,
+                     trControl = train_control,
+                     method = "knn", tuneLength = 20)
+  ## Predict
+  pred_knn <- predict(Knn_model,
+                      newdata = dat_final_test)
+  ## Evaluation Metrics
+  cm_knn <- caret::confusionMatrix(y_test, pred_knn)
+  
+  
+  ## SVM
+  ## Grid Search
+  C <- c(0.1, 1, 10, 100)
+  
+  svm_model <- caret::train(Id ~., data = dat_final_train,
+                     method = "svmLinear",
+                     tuneGrid = expand.grid(C = C))
+  ## Predict
+  pred_svm <- predict(svm_model,
+                      newdata = dat_final_test)
+  ## Evaluation Metrics
+  cm_svm <- caret::confusionMatrix(y_test, pred_svm)
+  
+  
+  ## RF
+  ## Grid Search
+  mtry <- sqrt(ncol(dat_final_train))
+  tunegrid <- expand.grid(.mtry = mtry)
+  
+  rf_model <- caret::train(Id ~., data = dat_final_train,
+                      trControl = train_control,
+                      method = "rf",
+                    tuneGrid = tunegrid)
+  ## Predict
+  pred_rf <- predict(rf_model,
+                     newdata = dat_final_test)
+  ## Evaluation Metrics
+  cm_rf <- caret::confusionMatrix(y_test, pred_rf)
+  
+  ## Results
+  method <- c("Logistic", "LDA", "KNN", "SVM", "RF")
+  accuracy <- c(cm_logit$overall[1][[1]],
+              cm_lda$overall[1][[1]],
+              cm_knn$overall[1][[1]],
+              cm_svm$overall[1][[1]],
+              cm_rf$overall[1][[1]])
+  res <- data.frame(method, accuracy)
+  
+  return(res)
+}
+```
+
+```{r, echo = F}
+## S = 0.1
+models_01  <- fit_model(dat_final_01)
+## S = 0.2
+models_02  <- fit_model(dat_final_02)
+## S = 0.3
+models_03  <- fit_model(dat_final_03)
+## S = 0.4
+models_04  <- fit_model(dat_final_04)
+## S = 0.5
+models_05  <- fit_model(dat_final_05)
+## S = 0.6
+models_06  <- fit_model(dat_final_06)
+## S = 0.7
+models_07  <- fit_model(dat_final_07)
+## S = 0.8
+models_08  <- fit_model(dat_final_08)
+## S = 0.9
+models_09  <- fit_model(dat_final_09)
+## S = 1
+models_10  <- fit_model(dat_final_10)
+## S = 1.1
+models_11  <- fit_model(dat_final_11)
+## S = 1.2
+models_12  <- fit_model(dat_final_12)
+# S = 1.3
+models_13  <- fit_model(dat_final_13)
+## S = 1.4
+models_14  <- fit_model(dat_final_14)
+## S = 1.5
+models_15  <- fit_model(dat_final_15)
+## S = 1.6
+models_16  <- fit_model(dat_final_16)
+## S = 1.7
+models_17  <- fit_model(dat_final_17)
+## S = 1.8
+models_18  <- fit_model(dat_final_18)
+## S = 1.9
+models_19  <- fit_model(dat_final_19)
+## S = 2
+models_2   <- fit_model(dat_final_2)
+```
+
+```{r, echo = F}
+# Adding column second
+models_01$sec <- 0.1
+models_02$sec <- 0.2
+models_03$sec <- 0.3
+models_04$sec <- 0.4
+models_05$sec <- 0.5
+models_06$sec <- 0.6
+models_07$sec <- 0.7
+models_08$sec <- 0.8
+models_09$sec <- 0.9
+models_10$sec <- 1
+models_11$sec <- 1.1
+models_12$sec <- 1.2
+models_13$sec <- 1.3
+models_14$sec <- 1.4
+models_15$sec <- 1.5
+models_16$sec <- 1.6
+models_17$sec <- 1.7
+models_18$sec <- 1.8
+models_19$sec <- 1.9
+models_2$sec  <- 2
+
+## Merge results
+res <- rbind(models_01, models_02,
+             models_03, models_04,
+             models_05, models_06,
+             models_07, models_08,
+             models_09, models_10,
+             models_11, models_12,
+             models_13, models_14,
+             models_15, models_16,
+             models_17, models_18,
+             models_19, models_2)
+```
+
+#### Window size
+
+```{r, echo = F, warning = F, fig.width = 8, fig.height = 6, fig.align = "center"}
+## Plot
+ggplot(res, aes(x = sec, y = accuracy, color = method)) +
+  geom_line() +
+  geom_point(size = 1.5) +
+  xlab("window seconds") +
+  ylab("") +
+  ylim(0.65, 1) ## manage limit y-axis
+```
+
+From this plot it's clear that increasing the window size we get a better performance.
+In particular, the accuracy is increasing until 1 sec, then it becomes stable around 0.99.
+
+At the end, we decided to use a window that corresponds to 1.28 seconds.
+The reason is that this window can adequately represent cycles in walking activity.
+[Reference](https://www.researchgate.net/publication/322835708_Classifying_Human_Walking_Patterns_using_Accelerometer_Data_from_Smartphone) For each window we have 20 samples.
+
+Let's explore visually some of the features created.
+
+<p>&nbsp;</p>
+
+```{r, echo = F, message = F, warning = F, fig.width = 12, fig.height = 8, fig.align = "center"}
+## Preparing data
+dat_final_128 <- new_features(dav_df, anto_df,
+                                mario_df, giu_df, 1.28)
+
+## Mean
+mean_plot1 <- ggplot(dat_final_128, aes(mean_Accx)) +
+  geom_histogram(bins = 30) +
+  facet_grid(~Id) +
+  ggtitle("Distribution Mean Acceleration x-axis") +
+  xlab("")
+
+mean_plot2 <- ggplot(dat_final_128, aes(mean_Accy)) +
+  geom_histogram(bins = 30) +
+  facet_grid(~Id) +
+  ggtitle("Distribution Mean Acceleration y-axis") +
+  xlab("")
+
+mean_plot3 <- ggplot(dat_final_128, aes(mean_Accz)) +
+  geom_histogram(bins = 30) +
+  facet_grid(~Id) +
+  ggtitle("Distribution Mean Acceleration z-axis") +
+  xlab("")
+
+## Plot
+grid.arrange(mean_plot1, mean_plot2, mean_plot3)
+```
+
+<p>&nbsp;</p>
+
+As we can see, for the x-axis the acceleration of the subject 1 and 2 is always around 0, while for the subject 3 we have only negative values of the mean and for the subject 4, the range of values is positive.
+
+Regarding to y-axis, the acceleration of all subject is around -10, but with different variability.
+The same behavior also for the z-axis.
+
+<p>&nbsp;</p>
+
+#### Comparing models
+
+```{r, echo = F}
+set.seed(123)
+
+## S = 1.28
+model_128 <- fit_model(dat_final_128)
+
+## Check
+kableExtra::kable(model_128, align = "cc") %>% 
+  kableExtra::kable_styling()
+```
+
+The performance of the methods are very similar to each other; we choose `Random Forest` that is the best one.
+Let's see in details the confusion matrix.
+
+```{r, echo = F, warning = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+## Best choice ---> RF with s = 1.28
+
+## Fit Random Forest with s = 1.28
+## Split
+idx <- createDataPartition(dat_final_128$Id, p = 0.8,
+                           list = F)
+dat_final_128_train    <- dat_final_128[idx, ]
+dat_final_128_test     <- dat_final_128[-idx, ]
+y_test_128             <- dat_final_128_test$Id
+dat_final_128_test$Id  <- NULL
+
+## Fit
+rf_128 <- randomForest(Id ~., data = dat_final_128_train)
+## Predict
+rf_128_predict <- predict(rf_128,
+                          newdata = dat_final_128_test)
+## Performance
+cm_rf_128 <- caret::confusionMatrix(y_test_128,rf_128_predict)
+
+## Plot
+plot_confusion_matrix(as_tibble(cm_rf_128$table),
+                      target_col = "Reference",
+                      prediction_col = "Prediction",
+                      counts_col = "n",
+                      add_normalized = F)
+```
+
+The accuracy is `r round(cm_rf_128$overall[1][[1]], 4)`
+
+### IML
+
+Machine learning models usually perform really well for predictions, but are not interpretable.
+We decided to implement different techniques to explain the Random Forest model.
+
+#### Features Importance
+
+```{r, echo = F, fig.align = "center"}
+## Features Importance
+X         <- dat_final_128_test
+predictor <- Predictor$new(rf_128, data = X,
+                           y = y_test_128)
+imp <- FeatureImp$new(predictor, loss = "ce")
+plot(imp)
+```
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+As we can see looking at the plot, the most important features are:
+
+-   **Mean Accelerometer x-axis**
+-   **Mean Accelerometer x-axis**
+-   and others statistics computed on z-accelerometer
+
+Now, we can go deeper into the analysis of these features.
+Let's see the `ALE Plot` and `Shapley Values Plot`.
+
+<p>&nbsp;</p>
+
+#### ALE Plot
+
+```{r, echo = F, fig.align = "center"}
+## ALE MeanAccZ
+ale_meanAccz <- FeatureEffect$new(predictor,
+                         feature = "mean_Accz")
+ale_meanAccz$plot()
+```
+
+<p>&nbsp;</p>
+
+```{r, echo = F, fig.align = "center"}
+## ALE MeanAccx
+ale_meanAccx <- FeatureEffect$new(predictor,
+                         feature = "mean_Accx")
+ale_meanAccx$plot()
+```
+
+<p>&nbsp;</p>
+
+```{r, echo = F, fig.align = "center"}
+## ALE sd_AccZ
+ale_sdAccz <- FeatureEffect$new(predictor,
+                                feature = "sd_Accz")
+ale_sdAccz$plot()
+```
+
+The `Mean Acceleration on the z-axis` is more relevant for the classification of class **1** and **3** In fact, as we can see from the plot, for these classes we have a greater variation with respect to the other two classes.
+This happens also for the `Standard Deviation on the same axis`.
+
+Similar speech for the `Mean Acceleration on the x-axis`, that is more relevant for the **2** and **4** classes.
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+#### Shapley Values Plot
+
+```{r, echo = F, fig.align = "center"}
+## Shapley Values
+shapley <- Shapley$new(predictor,
+            x.interest = dat_final_128_test[1,])
+shapley$plot()
+```
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+We saw that only few variables have a big importance.
+For this reason, we can try to train a new model, using a lower number of variables.
+
+The features are:
+
+-   mean_Accz
+-   mean_Accx
+-   sd_Accz
+-   absd_Accz
+-   rms_Accz
+
+```{r, echo = F, warning = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+## Fit Reduced Model
+rf_128_reduced <- randomForest(Id ~ mean_Accz +
+                                 mean_Accx +
+                                 sd_Accz +
+                                 absd_Accz +
+                                 rms_Accz,
+                  data = dat_final_128_train)
+## Predict
+rf_128_reduced_predict <- predict(rf_128_reduced,
+                              newdata = dat_final_128_test)
+## Performance
+cm_rf_128_reduced <- caret::confusionMatrix(y_test_128,
+                            rf_128_reduced_predict)
+
+## Plot
+plot_confusion_matrix(as_tibble(cm_rf_128_reduced$table),
+                      target_col = "Reference",
+                      prediction_col = "Prediction",
+                      counts_col = "n",
+                      add_normalized = F)
+```
+
+The accuracy is `r round(cm_rf_128_reduced$overall[1][[1]], 4)`
+
+Using a lower number of features, the performance is quite the same.
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+## Clustering
+
+At this point, we wanted to use another approach.
+We removed the target variable and we used an unsupervised method in order to identify the different classes.
+In order to find the best number of clusters, we computed the `Total Within SUm of Square` for different numbers of K.
+
+```{r, echo = F}
+## remove target variable
+y_real_128       <- dat_final_128$Id
+dat_final_128$Id <- NULL
+```
+
+```{r, echo = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+## Clustering
+## K-Means
+
+## Total Within Sum of Square Vs Number of clusters
+kmax <- 15
+wss <- sapply(1:kmax, 
+              function(k){kmeans(dat_final_128, k, 
+                                 nstart = 50, 
+                                 iter.max = 15
+                                 )$tot.withinss})
+
+## Plot
+ggplot() + geom_line(aes(x = 1:kmax, y = wss)) +
+  geom_point(aes(x = 1:kmax, y = wss)) +
+  scale_x_continuous(breaks = 1:kmax) +
+  xlab("K") +
+  ylab("Total Within Sum of Square")
+```
+
+Looking at the plot, we suppose that the "elbow" is around K = 2 and K = 4.
+Let's see also the `Average Silhouette Plot`.
+
+<p>&nbsp;</p>
+
+```{r, echo = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+## Silhouette
+set.seed(123)
+D2   <- dist(dat_final_128, method = "euclidean")
+Kmax <- 10  
+ASW  <- rep(0, times = Kmax-1)
+for(k in 2:Kmax){
+    a   <- kmeans(dat_final_128, k, nstart = 25)
+    s   <- silhouette(x = a$cluster , dist = D2)
+    ASW[k-1] <- mean(s[,3])
+}
+
+## Plot
+ggplot() + geom_line(aes(x = 2:Kmax, y = ASW)) +
+  geom_point(aes(x = 2:Kmax, y = ASW)) +
+  scale_x_continuous(breaks = 2:Kmax) +
+  xlab("K") +
+  ylab("Average Silhouette Width")
+```
+
+The K that maximizes the Average Silhouette Width is for K = 2 and K = 4.
+At this point, we computed the K-Means for these values of K.
+
+<p>&nbsp;</p>
+
+```{r, echo = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+set.seed(1234)
+## K <- 4
+km_res_4 <- kmeans(dat_final_128, centers = 4, nstart = 25)
+km_res_2 <- kmeans(dat_final_128, centers = 2, nstart = 25)
+
+## Clusters Silhouette
+sil_k2 <- silhouette(km_res_2$cluster, dist(dat_final_128))
+sil_k4 <- silhouette(km_res_4$cluster, dist(dat_final_128))
+```
+
+### Silhouette Plot
+
+```{r, echo = F, comment = NA, fig.width = 6, fig.height = 4, fig.align = "center"}
+## Plot (k = 2)
+fviz_silhouette(sil_k2)
+```
+
+<p>&nbsp;</p>
+
+```{r, echo = F, comment = NA, fig.width = 6, fig.height = 4, fig.align = "center"}
+## Plot (k = 4)
+fviz_silhouette(sil_k4)
+```
+
+<p>&nbsp;</p>
+
+At this point, we made a plot to see how the different clusters are distributed with respect to the Mean Accelerometer on the 3-axis.
+
+```{r, echo = F, warning = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+## Visualizing k-means clusters
+## k = 2
+plot_ly(x = dat_final_128$mean_Accx,
+        y = dat_final_128$mean_Accy,
+        z = dat_final_128$mean_Accz,
+        type = "scatter3d", mode = "markers",
+        color = factor(km_res_2$cluster),
+        size = 1)
+```
+
+For K = 2, the clustering is able to distinguish two different groups with respect to the x-axis.
+
+<p>&nbsp;</p>
+
+<p>&nbsp;</p>
+
+```{r, echo = F, warning = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+## K = 4
+plot_ly(x = dat_final_128$mean_Accx,
+        y = dat_final_128$mean_Accy,
+        z = dat_final_128$mean_Accz,
+        type = "scatter3d", mode = "markers",
+        color = factor(km_res_4$cluster),
+        size = 1)
+```
+
+For K = 4, we have a good separation between the clusters 2 and 4, while is difficult to distinguish between clusters 1 and 3.
+From the above clusters, we see that the the primary difference in walking styles between people is caused by acceleration values in x and z axes, while y axis acceleration is about the same and this is a consistent result with what has been seen in the IML section.
+
+<p>&nbsp;</p>
+
+Given that we know the `ground truth`, we compared the clusters obtained with the original labels.
+
+```{r, echo = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+## K = 4
+plot_ly(x = dat_final_128$mean_Accx,
+        y = dat_final_128$mean_Accy,
+        z = dat_final_128$mean_Accz,
+        type = "scatter3d", mode = "markers",
+        color = y_real_128,
+        size = 1)
+```
+
+The cluster is able to identify the different subjects, but there is a little bit of confusion with the separation between the subjects 1 and 3.
+Furthermore, it is not able to identify well the set of samples that is far away from the central part of distribution.
+
+<p>&nbsp;</p>
+
+This situation is more clear looking at the confusion matrix between the true labels and the discovered clusters.
+
+```{r, echo = F, warning = F, message = F, fig.width = 6, fig.height = 4, fig.align = "center"}
+## Confusion Matrix
+cm_kmeans <- caret::confusionMatrix(factor(y_real_128),
+                              factor(km_res_4$cluster))
+## Plot
+plot_confusion_matrix(as_tibble(cm_kmeans$table),
+                      target_col = "Reference",
+                      prediction_col = "Prediction",
+                      counts_col = "n",
+                      add_normalized = F)
+```
+
+The accuracy is `r round(cm_kmeans$overall[1][[1]], 4)`
+
+### Conclusions
+
+The performances are excellent for all models, the best result is obtained with the random forest.
+The window size is relevant for the accuracy, in particular we noted that after a window size of 0.7 seconds, we had a score greater than 0.90 and after 1 second the performances were very similar to each other with good results.
+
+### Future Works
+
+-   Use a low-pass filter in order to separate the linear acceleration due to the body motion and the acceleration due to the gravity.
+
+-   Dynamic allocation window size
+
+### References
+
+1. [A method for Predicting Human Walking Patterns using Smartphone's Accelerometer Sensor](https://www.researchgate.net/publication/350447757_A_Method_for_Predicting_Human_Walking_Patterns_using_Smartphone's_Accelerometer_Sensor)
+
+2. [Recognition of Gait Activities Using Acceleration Data from A Smartphone and A Wearable Device](https://www.researchgate.net/publication/337461320_Recognition_of_Gait_Activities_Using_Acceleration_Data_from_A_Smartphone_and_A_Wearable_Device)
+
+3. [Classifying Human Walking Patterns using Accelerometer Data from Smartphone](https://www.researchgate.net/publication/322835708_Classifying_Human_Walking_Patterns_using_Accelerometer_Data_from_Smartphone)
+
+4. [Human Activity Recognition from Accelerometer Data Using a Wearable Device](https://www.researchgate.net/publication/221258784_Human_Activity_Recognition_from_Accelerometer_Data_Using_a_Wearable_Device)
+
+5. [A dynamic window-size based segmantation technique to detect driver entry and exit from a car](https://www.sciencedirect.com/science/article/pii/S1319157821002317)
+
+<p>&nbsp;</p>
